@@ -1,0 +1,31 @@
+# Variáveis de ambiente e segredos
+.env
+.env.*
+!.env.example
+
+# Cache e artefatos do Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Ambientes virtuais
+.venv/
+venv/
+env/
+
+# Artefatos gerados pela aplicação
+checkpoints.db
+checkpoints.db-shm
+checkpoints.db-wal
+rag.log
+
+# Editor / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
