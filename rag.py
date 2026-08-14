@@ -1,4 +1,5 @@
 import io
+import logging
 import os
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit, urlunsplit
@@ -11,11 +12,19 @@ from pypdf import PdfReader
 from tavily import TavilyClient
 from langchain_core.documents import Document
 
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+# from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_huggingface import HuggingFaceEmbeddings
 
 load_dotenv()
+
+LOG_FILE = Path(__file__).resolve().parent / "rag.log"
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    logger.setLevel(logging.INFO)
+    file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+    file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    logger.addHandler(file_handler)
 
 #######
 # Definição da base de documentação e caminhos para páginas específicas
@@ -31,7 +40,89 @@ DOC_PATHS = [
 
 LOCAL_DOCS = [
     "Plano_de_Entregas.md",
+    "Info_adicionais.md",
 ]
+
+RAG_STORES: dict[str, InMemoryVectorStore] = {}
+
+########
+# Funções para construir e recuperar os stores de documentos, indexando-os apenas uma vez
+#####################
+
+def build_rag_stores() -> dict[str, InMemoryVectorStore]:
+    """Carrega e indexa os documentos restritos às URLs informadas e aos arquivos locais, em cache."""
+    global RAG_STORES
+
+    if RAG_STORES:
+        logger.info("Stores RAG já carregados; utilizando cache.")
+        return RAG_STORES
+
+    logger.info("Iniciando carregamento dos documentos do RAG.")
+    web_docs, web_errors = load_url_documents()
+    local_docs = load_local_documents(LOCAL_DOCS)
+    logger.info("Documentos carregados: %d web, %d locais.", len(web_docs), len(local_docs))
+
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    web_splits = text_splitter.split_documents(web_docs)
+    local_splits = text_splitter.split_documents(local_docs)
+    logger.info("Chunks criados: %d web, %d locais.", len(web_splits), len(local_splits))
+    for index, chunk in enumerate(web_splits[:2], start=1):
+        logger.info("web chunk %d:\n%s", index, chunk.page_content)
+    for index, chunk in enumerate(local_splits[:2], start=1):
+        logger.info("local chunk %d:\n%s", index, chunk.page_content)
+
+    embeddings = HuggingFaceEmbeddings(
+        model_name="tardellirs/colibri-embed-ptbr",
+        model_kwargs={"device": "cpu"},
+        encode_kwargs={"normalize_embeddings": False},
+    )
+
+    web_vector_store = InMemoryVectorStore(embeddings)
+    local_vector_store = InMemoryVectorStore(embeddings)
+
+    if web_splits:
+        web_vector_store.add_documents(documents=web_splits)
+    if local_splits:
+        local_vector_store.add_documents(documents=local_splits)
+
+    RAG_STORES = {
+        "web": web_vector_store,
+        "local": local_vector_store,
+        "web_errors": web_errors,
+    }
+    logger.info("Indexação concluída: %d chunks web, %d chunks locais.", len(web_splits), len(local_splits))
+    for error in web_errors:
+        logger.warning("%s", error)
+    return RAG_STORES
+
+
+def retrieve_rag_context(query: str, source: str = "all", k: int = 3) -> str:
+    """Recupera trechos relevantes dos stores de documentos e retorna texto concatenado."""
+    stores = build_rag_stores()
+    candidates: list[str] = []
+
+    search_sources = []
+    if source in {"all", "web"}:
+        search_sources.append(stores.get("web"))
+    if source in {"all", "local"}:
+        search_sources.append(stores.get("local"))
+
+    for store in search_sources:
+        if store is None:
+            continue
+        try:
+            docs = store.similarity_search(query, k=k)
+        except Exception:
+            continue
+        for doc in docs:
+            text = (doc.page_content or "").strip()
+            if text:
+                metadata = doc.metadata if isinstance(doc.metadata, dict) else {}
+                source = metadata.get("source", "Fonte não identificada")
+                candidates.append(f"Fonte: {source}\n{text}")
+
+    return "\n\n".join(candidates[:k])
+
 
 #######
 # Funções auxiliares para limpeza de nomes de documentos, normalização de URLs,  
@@ -118,37 +209,41 @@ def load_pdf_documents(pdf_url: str, error_messages: list[str]) -> list[Document
         return []
 
 
-def extract_web_documents(url: str, error_messages: list[str]) -> list[Document]:
-    """Usa o Tavily para extrair conteúdo de uma página web sem depender de langchain-community."""
-    api_key = os.getenv("TAVILY_API_KEY")
-    if not api_key:
-        error_messages.append("TAVILY_API_KEY não configurada. Ignorando extração web via Tavily.")
-        return []
-
-    client = TavilyClient(api_key=api_key)
-    try:
-        response = client.extract(
-            urls=[url],
-            format="markdown",
-            extract_depth="basic",
-            timeout=30,
-        )
-    except Exception as exc:
-        error_messages.append(f"Erro ao extrair a página web {clean_document_name(url)}: {exc}")
-        return []
-
-    items = response.get("results", []) if isinstance(response, dict) else []
-    docs: list[Document] = []
-    for item in items:
-        content = item.get("content") or item.get("raw_content") or ""
-        if content.strip():
-            docs.append(
-                Document(
-                    page_content=content,
-                    metadata={"source": url, "content_type": "web"},
-                )
-            )
-    return docs
+# -----------------------------------------------------------------------------
+# Busca web via Tavily mantida apenas como referência para uso futuro.
+# A versão atual do RAG fica restrita às URLs informadas e aos documentos locais.
+# -----------------------------------------------------------------------------
+# def extract_web_documents(url: str, error_messages: list[str]) -> list[Document]:
+#     """Usa o Tavily para extrair conteúdo de uma página web sem depender de langchain-community."""
+#     api_key = os.getenv("TAVILY_API_KEY")
+#     if not api_key:
+#         error_messages.append("TAVILY_API_KEY não configurada. Ignorando extração web via Tavily.")
+#         return []
+#
+#     client = TavilyClient(api_key=api_key)
+#     try:
+#         response = client.extract(
+#             urls=[url],
+#             format="markdown",
+#             extract_depth="basic",
+#             timeout=30,
+#         )
+#     except Exception as exc:
+#         error_messages.append(f"Erro ao extrair a página web {clean_document_name(url)}: {exc}")
+#         return []
+#
+#     items = response.get("results", []) if isinstance(response, dict) else []
+#     docs: list[Document] = []
+#     for item in items:
+#         content = item.get("content") or item.get("raw_content") or ""
+#         if content.strip():
+#             docs.append(
+#                 Document(
+#                     page_content=content,
+#                     metadata={"source": url, "content_type": "web"},
+#                 )
+#             )
+#     return docs
 
 
 def load_local_documents(local_doc_paths: list[str] | None = None) -> list[Document]:
@@ -189,6 +284,7 @@ def load_local_documents(local_doc_paths: list[str] | None = None) -> list[Docum
                             )
                         )
         except Exception as exc:
+            logger.exception("Não foi possível ler o documento local %s", file_path.name)
             print(f"Não foi possível ler o documento local {file_path.name}: {exc}")
 
     return docs
@@ -207,9 +303,12 @@ def load_url_documents(doc_paths: list[str] | None = None) -> tuple[list[Documen
             resposta = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
             resposta.raise_for_status()
         except requests.RequestException:
+            logger.exception("Não foi possível carregar a URL %s", url)
             continue
 
-        docs_web = extract_web_documents(url, error_messages)
+        # Busca web via Tavily mantida comentada para uso futuro.
+        # docs_web = extract_web_documents(url, error_messages)
+        docs_web: list[Document] = []
         if not docs_web:
             try:
                 soup = BeautifulSoup(resposta.text, "html.parser")
@@ -222,6 +321,7 @@ def load_url_documents(doc_paths: list[str] | None = None) -> tuple[list[Documen
                         )
                     ]
             except Exception as exc:
+                logger.exception("Erro ao converter a página em texto %s", url)
                 error_messages.append(f"Erro ao converter a página em texto {clean_document_name(url)}: {exc}")
 
         soup = BeautifulSoup(resposta.text, "html.parser")
@@ -249,59 +349,73 @@ def load_url_documents(doc_paths: list[str] | None = None) -> tuple[list[Documen
 
     return docs, error_messages
 
-########
-# Carregando documentos por origem para manter fontes separadas por agente
-#################
+if __name__ == "__main__":
+    ########
+    # Carregando documentos por origem para manter fontes separadas por agente
+    #################
 
-web_docs, web_errors = load_url_documents()
-local_docs = load_local_documents(LOCAL_DOCS)
+    web_docs, web_errors = load_url_documents()
+    local_docs = load_local_documents(LOCAL_DOCS)
 
-print(f"Carregados {len(web_docs)} documentos das URLs.")
-print(f"Carregados {len(local_docs)} documentos locais.")
+    print(f"Carregados {len(web_docs)} documentos das URLs.")
+    print(f"Carregados {len(local_docs)} documentos locais.")
 
-print("\nDocumentos das URLs:")
-for i, doc in enumerate(web_docs, start=1):
-    source = doc.metadata.get("source") if isinstance(doc.metadata, dict) else str(doc.metadata)
-    title = clean_document_name(source)
-    print(f"{i}. {title} -> {source}")
+    print("\nDocumentos das URLs:")
+    for i, doc in enumerate(web_docs, start=1):
+        source = doc.metadata.get("source") if isinstance(doc.metadata, dict) else str(doc.metadata)
+        title = clean_document_name(source)
+        print(f"{i}. {title} -> {source}")
 
-print("\nDocumentos locais:")
-for i, doc in enumerate(local_docs, start=1):
-    source = doc.metadata.get("source") if isinstance(doc.metadata, dict) else str(doc.metadata)
-    title = clean_document_name(source)
-    print(f"{i}. {title} -> {source}")
+    print("\nDocumentos locais:")
+    for i, doc in enumerate(local_docs, start=1):
+        source = doc.metadata.get("source") if isinstance(doc.metadata, dict) else str(doc.metadata)
+        title = clean_document_name(source)
+        print(f"{i}. {title} -> {source}")
 
-if web_errors:
-    print("\nMensagens registradas para documentos das URLs:")
-    for message in web_errors:
-        print(f"- {message}")
+    if web_errors:
+        print("\nMensagens registradas para documentos das URLs:")
+        for message in web_errors:
+            print(f"- {message}")
 
-#############
-# Dividindo os documentos em chunks menores para processamento posterior
-###########################
+    #############
+    # Dividindo os documentos em chunks menores para processamento posterior
+    ###########################
 
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-web_splits = text_splitter.split_documents(web_docs)
-local_splits = text_splitter.split_documents(local_docs)
-print(f"Split web docs into {len(web_splits)} chunks.")
-print(f"Split local docs into {len(local_splits)} chunks.")
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    web_splits = text_splitter.split_documents(web_docs)
+    local_splits = text_splitter.split_documents(local_docs)
+    print(f"Split web docs into {len(web_splits)} chunks.")
+    print(f"Split local docs into {len(local_splits)} chunks.")
 
-###########
-# Criando embeddings e armazenando os chunks em stores separados por origem
-############################
+    print("\nPrimeiros 2 chunks dos documentos web:")
+    for index, chunk in enumerate(web_splits[:2], start=1):
+        print(f"\n--- web chunk {index} ---\n{chunk.page_content}")
 
-#embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
-#embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-2")
-embeddings = HuggingFaceEmbeddings(
-    model_name="tardellirs/colibri-embed-ptbr",
-    model_kwargs={"device": "cpu"},
-    encode_kwargs={"normalize_embeddings": False},
-)
+    print("\nPrimeiros 2 chunks dos documentos locais:")
+    for index, chunk in enumerate(local_splits[:2], start=1):
+        print(f"\n--- local chunk {index} ---\n{chunk.page_content}")
 
-web_vector_store = InMemoryVectorStore(embeddings)
-local_vector_store = InMemoryVectorStore(embeddings)
+    ###########
+    # Criando embeddings e armazenando os chunks em stores separados por origem
+    ############################
 
-web_vector_store.add_documents(documents=web_splits)
-local_vector_store.add_documents(documents=local_splits)
-print(f"Indexed {len(web_splits)} web chunks.")
-print(f"Indexed {len(local_splits)} local chunks.")
+    #embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
+    #embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-2")
+    embeddings = HuggingFaceEmbeddings(
+        model_name="tardellirs/colibri-embed-ptbr",
+        model_kwargs={"device": "cpu"},
+        encode_kwargs={"normalize_embeddings": False},
+    )
+
+    web_vector_store = InMemoryVectorStore(embeddings)
+    local_vector_store = InMemoryVectorStore(embeddings)
+
+    if web_splits:
+        web_vector_store.add_documents(documents=web_splits)
+    if local_splits:
+        local_vector_store.add_documents(documents=local_splits)
+
+    RAG_STORES["web"] = web_vector_store
+    RAG_STORES["local"] = local_vector_store
+    print(f"Indexed {len(web_splits)} web chunks.")
+    print(f"Indexed {len(local_splits)} local chunks.")

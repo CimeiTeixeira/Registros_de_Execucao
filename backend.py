@@ -2,7 +2,9 @@
 import warnings
 warnings.filterwarnings("ignore", message=".*TqdmWarning.*")
 
+import json
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
 from typing import TypedDict, Annotated, List
@@ -11,7 +13,8 @@ import operator
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from tavily import TavilyClient
+
+from rag import build_rag_stores, retrieve_rag_context
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -23,9 +26,6 @@ load_dotenv()
 
 # Define as variáveis de ambiente
 os.environ['GOOGLE_API_KEY'] = os.getenv('GEMINI_API_KEY')
-if not os.getenv('TAVILY_API_KEY'):
-    raise RuntimeError("TAVILY_API_KEY não configurada. Defina a variável no arquivo .env antes de iniciar o backend.")
-os.environ['TAVILY_API_KEY'] = os.getenv('TAVILY_API_KEY')
 
 
 # Define o estado do agente (AgentState)
@@ -37,6 +37,8 @@ class AgentState(TypedDict):
     conteudo: List[str]
     numero_revisao: int
     maximo_revisoes: int
+    temperatura: float
+    material_revisao: str
 
 
 # Define o modelo Pydantic para a saída estruturada
@@ -50,77 +52,102 @@ memory = SqliteSaver(conn)
 
 # Inicializa o modelo de linguagem
 nome_modelo = os.getenv("GOOGLE_MODEL", "gemini-3-flash-preview")
-model = ChatGoogleGenerativeAI(model=nome_modelo, temperature=0)
+model = ChatGoogleGenerativeAI(model=nome_modelo, temperature=1)
 
 # Cria um Runnable para a saída estruturada (forma correta para Gemini)
 structured_model = model.with_structured_output(Queries)
 
+PROMPTS_FILE = Path(__file__).resolve().parent / "prompts.json"
+PROMPT_KEYS = (
+    "PLANEJAMENTO_PROMPT",
+    "PESQUISA_PLANEJAMENTO_PROMPT",
+    "REDIGIR_PROMPT",
+    "ANALISAR_PROMPT",
+)
 
-# Prompts
-PLANEJAMENTO_PROMPT = """Você é um escritor especialista em organizar textos e criar esboços de alto nível a partir do relato do usuário. \
-Escreva esse esboço baseado no relato fornecido pelo usuário, organizando-o como um diário de bordo claro. \
-Apresente um plano da redação junto com quaisquer notas ou instruções relevantes."""
 
-REDIGIR_PROMPT = """Você é um assistente de redação com a tarefa de escrever excelentes redações curtas.\
-Gere a melhor redação possível para o esboço inicial. \
-Esta redação será o registro de execução do usuário. \
-Se o usuário fornecer críticas, responda com uma versão revisada das suas tentativas anteriores. \
-Utilize todas as informações abaixo conforme necessário:
+def load_prompt_config() -> dict[str, str]:
+    with PROMPTS_FILE.open("r", encoding="utf-8") as prompt_file:
+        prompts = json.load(prompt_file)
 
-------
+    missing_keys = [key for key in PROMPT_KEYS if key not in prompts]
+    extra_keys = [key for key in prompts if key not in PROMPT_KEYS]
+    if missing_keys or extra_keys or any(not isinstance(prompts[key], str) for key in PROMPT_KEYS):
+        raise ValueError("prompts.json deve conter somente as quatro chaves com valores de texto.")
+    return prompts
 
-{content}"""
 
-ANALISAR_PROMPT = """Você é um chefe analisando o registro de execução do usuário. \
-Gere uma crítica e recomendações para o registro de execução do usuário. \
-Forneça recomendações detalhadas, incluindo pedidos sobre extensão, profundidade, estilo etc."""
+def save_prompt_config(prompts: dict[str, str]) -> None:
+    missing_keys = [key for key in PROMPT_KEYS if key not in prompts]
+    extra_keys = [key for key in prompts if key not in PROMPT_KEYS]
+    if missing_keys or extra_keys or any(not isinstance(prompts[key], str) for key in PROMPT_KEYS):
+        raise ValueError("A configuração deve conter somente as quatro chaves de prompt com valores de texto.")
 
-PESQUISA_PLANEJAMENTO_PROMPT = """Você é um pesquisador encarregado de fornecer informações que podem \
-ser usadas ao escrever o seguinte registro de execução do usuário. Gere uma lista de consultas de pesquisa que \
-recolham quaisquer informações relevantes. Gere no máximo 3 consultas."""
+    with PROMPTS_FILE.open("w", encoding="utf-8") as prompt_file:
+        json.dump(prompts, prompt_file, ensure_ascii=False, indent=2)
+        prompt_file.write("\n")
 
-PESQUISAR_CRITICA_PROMPT = """Você é um pesquisador encarregado de fornecer informações que podem \
-ser usadas ao fazer quaisquer revisões solicitadas (conforme descrito abaixo). \
-Gere uma lista de consultas de pesquisa que recolham quaisquer informações relevantes. Gere no máximo 3 consultas."""
 
-# Inicializa o cliente Tavily
-tavily = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
-
+def modelo_da_execucao(state: AgentState):
+    return ChatGoogleGenerativeAI(
+        model=nome_modelo,
+        temperature=state.get("temperatura", 1),
+    )
 
 # Definição dos nós do LangGraph
 def plano_node(state: AgentState):
+    prompts = load_prompt_config()
     messages = [
-        SystemMessage(content=PLANEJAMENTO_PROMPT),
+        SystemMessage(content=prompts["PLANEJAMENTO_PROMPT"]),
         HumanMessage(content=state['tarefa'])
     ]
-    response = model.invoke(messages)
+    response = modelo_da_execucao(state).invoke(messages)
     return {"plano": response.content}
 
 
 def pesquisa_plano_node(state: AgentState):
-    queries = structured_model.invoke([
-        SystemMessage(content=PESQUISA_PLANEJAMENTO_PROMPT),
+    prompts = load_prompt_config()
+    structured_model_execucao = modelo_da_execucao(state).with_structured_output(Queries)
+    queries = structured_model_execucao.invoke([
+        SystemMessage(content=prompts["PESQUISA_PLANEJAMENTO_PROMPT"]),
         HumanMessage(content=state['tarefa'])
     ])
     content = state['conteudo'] or []
     for q in queries.queries:
-        response = tavily.search(query=q, max_results=2)
-        for r in response['results']:
-            content.append(r['content'])
+        rag_context = retrieve_rag_context(q, source="all", k=3)
+        if rag_context.strip():
+            content.append(f"Contexto do RAG para: {q}\n\n{rag_context}")
     return {"conteudo": content}
 
 
 def geracao_node(state: AgentState):
+    prompts = load_prompt_config()
     content = "\n\n".join(state['conteudo'] or [])
+    revision_context = ""
+    if state.get("rascunho"):
+        revision_context += f"\n\nAqui está o rascunho anterior:\n\n{state['rascunho']}"
+    if state.get("critica"):
+        revision_context += f"\n\nAqui está a crítica a ser aplicada:\n\n{state['critica']}"
+    if state.get("material_revisao"):
+        revision_context += (
+            "\n\nMaterial adicional fornecido pelo usuário para esta revisão:\n\n"
+            f"{state['material_revisao']}"
+        )
+
     user_message = HumanMessage(
-        content=f"{state['tarefa']}\n\nAqui está o meu plano:\n\n{state['plano']}")
+        content=(
+            f"{state['tarefa']}\n\n"
+            f"Aqui está o meu plano:\n\n{state['plano']}"
+            f"{revision_context}"
+        )
+    )
     messages = [
         SystemMessage(
-            content=REDIGIR_PROMPT.format(content=content)
+            content=prompts["REDIGIR_PROMPT"].replace("{content}", content)
         ),
         user_message
     ]
-    response = model.invoke(messages)
+    response = modelo_da_execucao(state).invoke(messages)
     return {
         "rascunho": response.content,
         "numero_revisao": state.get("numero_revisao", 0) + 1
@@ -128,25 +155,21 @@ def geracao_node(state: AgentState):
 
 
 def reflexao_node(state: AgentState):
+    prompts = load_prompt_config()
     messages = [
-        SystemMessage(content=ANALISAR_PROMPT),
+        SystemMessage(content=prompts["ANALISAR_PROMPT"]),
         HumanMessage(content=state['rascunho'])
     ]
-    response = model.invoke(messages)
+    response = modelo_da_execucao(state).invoke(messages)
     return {"critica": response.content}
 
 
-def pesquisa_critica_node(state: AgentState):
-    queries = structured_model.invoke([
-        SystemMessage(content=PESQUISAR_CRITICA_PROMPT),
-        HumanMessage(content=state['critica'])
-    ])
-    content = state['conteudo'] or []
-    for q in queries.queries:
-        response = tavily.search(query=q, max_results=2)
-        for r in response['results']:
-            content.append(r['content'])
-    return {"conteudo": content}
+def executar_revisao(state: AgentState, material_revisao: str = ""):
+    state_com_material = {**state, "material_revisao": material_revisao}
+    critica = reflexao_node(state_com_material)
+    state_atualizado = {**state_com_material, **critica}
+    rascunho = geracao_node(state_atualizado)
+    return {**state_atualizado, **rascunho}
 
 
 def deve_continuar(state):
@@ -161,7 +184,6 @@ builder.add_node("planejador", plano_node)
 builder.add_node("pesquisa_plano", pesquisa_plano_node)
 builder.add_node("gerar", geracao_node)
 builder.add_node("refletir", reflexao_node)
-builder.add_node("pesquisa_critica", pesquisa_critica_node)
 
 builder.set_entry_point("planejador")
 
@@ -173,8 +195,7 @@ builder.add_conditional_edges(
 
 builder.add_edge("planejador", "pesquisa_plano")
 builder.add_edge("pesquisa_plano", "gerar")
-builder.add_edge("refletir", "pesquisa_critica")
-builder.add_edge("pesquisa_critica", "gerar")
+builder.add_edge("refletir", "gerar")
 
 graph = builder.compile(checkpointer=memory)
 
