@@ -413,22 +413,48 @@ with gr.Blocks(
             "Adicione documentos locais que serão usados pelo RAG. São aceitos arquivos .md, .txt e .pdf; "
             "subpastas não são necessárias para os uploads feitos aqui."
         )
+        with gr.Row():
+            with gr.Column(scale=4, min_width=0):
+                pass
+            with gr.Column(scale=8, min_width=0):
+                additional_file_upload = gr.File(
+                    label="Arquivos para adicionar",
+                    file_count="multiple",
+                    file_types=[".md", ".txt", ".pdf"],
+                    type="filepath",
+                )
+            with gr.Column(scale=4, min_width=0):
+                pass
 
-        additional_file_upload = gr.File(
-            label="Arquivos para adicionar",
-            file_count="multiple",
-            file_types=[".md", ".txt", ".pdf"],
-            type="filepath",
-        )
-        upload_additional_button = gr.Button("Adicionar arquivos", variant="primary")
+        with gr.Row():
+            with gr.Column(scale=8, min_width=0):
+                pass
+            with gr.Column(scale=4, min_width=0):
+                upload_additional_button = gr.Button("Adicionar arquivos", variant="primary")
+            with gr.Column(scale=8, min_width=0):
+                pass
 
-        additional_files = gr.Dropdown(
-            label="Arquivos atualmente na base_adicional",
-            choices=list_additional_files(),
-            value=None,
-            interactive=True,
-        )
-        delete_additional_button = gr.Button("Excluir arquivo selecionado")
+        with gr.Row():
+            with gr.Column(scale=4, min_width=0):
+                pass
+            with gr.Column(scale=8, min_width=0):
+                additional_files = gr.Dropdown(
+                    label="Arquivos atualmente na base_adicional",
+                    choices=list_additional_files(),
+                    value=None,
+                    interactive=True,
+                )
+            with gr.Column(scale=4, min_width=0):
+                pass
+
+        with gr.Row():
+            with gr.Column(scale=8, min_width=0):
+                pass
+            with gr.Column(scale=4, min_width=0):
+                delete_additional_button = gr.Button("Excluir arquivo selecionado")
+            with gr.Column(scale=8, min_width=0):
+                pass
+
         additional_files_status = gr.HTML(
             status_html(
                 "Os arquivos só entram no RAG depois que você clicar em 'Gerar Base' na aba Principal.",
@@ -470,11 +496,11 @@ with gr.Blocks(
 
         with gr.Row():
             with gr.Column(scale=8, min_width=0):
-                            pass
+                pass
             with gr.Column(scale=4):
                 save_keys_button = gr.Button("Salvar chaves", variant="primary")
             with gr.Column(scale=8, min_width=0):
-                            pass
+                pass
 
         with gr.Row():
             with gr.Column(scale=12):
