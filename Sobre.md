@@ -2,15 +2,23 @@
 
 Esta aplicação ajuda o usuário a transformar um relato informal de atividades em um **registro de execução** formal, alinhado ao Programa de Gestão (PGD), utilizando um agente construído com LangGraph e o modelo Gemini.
 
+## Antes de começar
+
+1. **Chaves**: Providencie chaves de API junto ao Gemini (google) e Tavily (opcional) e as registre na aba **Chaves**.
+1. Alimente, via aba **Base Adicional**, a aplicação com arquivos relevantes para o seu registro. Plano de Entregas, ou de trabalho, ou ainda definições, são sugestões, mas fica a seu critério.
+1. Verifique se os **Prompts** estão de acordo com o tipo de registro que você quer produzir. Na aba correspondente, eles podem ser editados, mas não exclua nenhum. Mantenha o formato json.
+
 ## Como funciona
 
+Vá para a aba **Principal** e siga estes passos:
+
 1. **Gerar Base**: antes de gerar qualquer registro, o usuário carrega a base de conhecimento (RAG), composta por:
-   - páginas normativas oficiais (e seus PDFs vinculados);
-   - todos os arquivos `.md`, `.txt` e `.pdf` colocados na pasta `base_adicional` (incluindo os documentos fornecidos no projeto).
-2. **Relato**: o usuário descreve, de forma livre, o que fez ou o que sua unidade fez no período.
-3. **Geração do registro**: o agente segue o fluxo abaixo para planejar, pesquisar, redigir e revisar automaticamente o registro.
-4. **Revisão sob demanda**: após a primeira geração, o usuário pode solicitar novas revisões a qualquer momento, podendo acrescentar material adicional por meio de um modal.
-5. **Prompts configuráveis**: os quatro prompts que orientam o agente podem ser editados diretamente pela interface, na aba "Prompts", e ficam armazenados em `prompts.json`.
+    1. páginas normativas oficiais (e seus PDFs vinculados);
+    1. todos os arquivos `.md`, `.txt` e `.pdf` colocados na pasta `base_adicional` (incluindo os documentos fornecidos no projeto).
+1. **Relato**: o usuário descreve, de forma livre, o que fez ou o que sua unidade fez no período.
+1. **Geração do registro**: o agente segue o fluxo abaixo para planejar, pesquisar, redigir e revisar automaticamente o registro.
+1. **Revisão sob demanda**: após a primeira geração, o usuário pode solicitar novas revisões a qualquer momento, podendo acrescentar material adicional por meio de um modal.
+1. **Prompts configuráveis**: os quatro prompts que orientam o agente podem ser editados diretamente pela interface, na aba "Prompts", e ficam armazenados em `prompts.json`.
 
 ## Fluxo do agente (LangGraph)
 
