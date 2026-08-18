@@ -33,10 +33,11 @@ from backend import (
     save_prompt_config,
 )
 from rag import ADDITIONAL_BASE_DIR, LOCAL_DOCUMENT_SUFFIXES, build_rag_stores, discover_local_documents
+from runtime_paths import data_path, resource_path
 import uuid
 
 
-ENV_PATH = Path(".env")
+ENV_PATH = data_path(".env")
 
 
 def list_additional_files() -> list[str]:
@@ -116,6 +117,9 @@ def save_api_key_settings(gemini_key: str, tavily_key: str):
     gemini_value = (gemini_key or "").strip()
     tavily_value = (tavily_key or "").strip()
 
+    if not gemini_value:
+        return status_html("Informe a chave do Gemini para salvar a configuração.")
+
     if not ENV_PATH.exists():
         ENV_PATH.touch(encoding="utf-8")
 
@@ -180,8 +184,8 @@ def load_prompts_for_editor():
 
 def render_about_html() -> str:
     """Converte Sobre.md em HTML, embutindo a imagem do grafo como data URI."""
-    about_text = Path("Sobre.md").read_text(encoding="utf-8")
-    image_path = Path("grafo_projeto.png")
+    about_text = resource_path("Sobre.md").read_text(encoding="utf-8")
+    image_path = resource_path("grafo_projeto.png")
     if image_path.exists():
         encoded_image = base64.b64encode(image_path.read_bytes()).decode("ascii")
         about_text = about_text.replace(

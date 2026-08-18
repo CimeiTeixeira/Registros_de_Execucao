@@ -15,10 +15,11 @@ from langchain_core.documents import Document
 # from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_huggingface import HuggingFaceEmbeddings
+from runtime_paths import data_path
 
-load_dotenv()
+load_dotenv(data_path(".env"))
 
-LOG_FILE = Path(__file__).resolve().parent / "rag.log"
+LOG_FILE = data_path("rag.log")
 logger = logging.getLogger(__name__)
 if not logger.handlers:
     logger.setLevel(logging.INFO)
@@ -38,7 +39,7 @@ DOC_PATHS = [
     "minimanuais-de-orientacoes-especificas",
 ]
 
-ADDITIONAL_BASE_DIR = Path(__file__).resolve().parent / "base_adicional"
+ADDITIONAL_BASE_DIR = data_path("base_adicional")
 LOCAL_DOCUMENT_SUFFIXES = {".md", ".txt", ".pdf"}
 
 RAG_STORES: dict[str, InMemoryVectorStore] = {}

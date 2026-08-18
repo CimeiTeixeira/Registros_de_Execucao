@@ -18,22 +18,27 @@ from rag import build_rag_stores, retrieve_rag_context
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.sqlite import SqliteSaver
+from runtime_paths import data_path, ensure_data_file
 
 import sqlite3
 
 # Carrega as variáveis de ambiente do arquivo .env
-load_dotenv()
+load_dotenv(data_path(".env"))
 
 # Define as variáveis de ambiente
-os.environ['GOOGLE_API_KEY'] = os.getenv('GEMINI_API_KEY')
+gemini_api_key = os.getenv("GEMINI_API_KEY")
+if gemini_api_key:
+    os.environ["GOOGLE_API_KEY"] = gemini_api_key
 
 
 def refresh_api_keys() -> None:
     """Atualiza as chaves em memória e recria o cliente Gemini quando a configuração mudar."""
     gemini_key = (os.getenv("GEMINI_API_KEY") or "").strip()
-    if gemini_key:
-        os.environ["GEMINI_API_KEY"] = gemini_key
-        os.environ["GOOGLE_API_KEY"] = gemini_key
+    if not gemini_key:
+        raise ValueError("Configure a chave do Gemini antes de gerar um registro.")
+
+    os.environ["GEMINI_API_KEY"] = gemini_key
+    os.environ["GOOGLE_API_KEY"] = gemini_key
 
     global model, structured_model
     model = ChatGoogleGenerativeAI(model=nome_modelo, temperature=1)
@@ -59,17 +64,15 @@ class Queries(BaseModel):
 
 
 # Inicializa o banco de dados para os checkpoints
-conn = sqlite3.connect("checkpoints.db", check_same_thread=False)
+conn = sqlite3.connect(data_path("checkpoints.db"), check_same_thread=False)
 memory = SqliteSaver(conn)
 
 # Inicializa o modelo de linguagem
 nome_modelo = os.getenv("GOOGLE_MODEL", "gemini-3-flash-preview")
-model = ChatGoogleGenerativeAI(model=nome_modelo, temperature=1)
+model = None
+structured_model = None
 
-# Cria um Runnable para a saída estruturada (forma correta para Gemini)
-structured_model = model.with_structured_output(Queries)
-
-PROMPTS_FILE = Path(__file__).resolve().parent / "prompts.json"
+PROMPTS_FILE = ensure_data_file("prompts.json")
 PROMPT_KEYS = (
     "PLANEJAMENTO_PROMPT",
     "PESQUISA_PLANEJAMENTO_PROMPT",
@@ -101,6 +104,10 @@ def save_prompt_config(prompts: dict[str, str]) -> None:
 
 
 def modelo_da_execucao(state: AgentState):
+    gemini_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+    if not gemini_key:
+        raise ValueError("Configure a chave do Gemini na aba Chaves antes de gerar um registro.")
+
     return ChatGoogleGenerativeAI(
         model=nome_modelo,
         temperature=state.get("temperatura", 1),
