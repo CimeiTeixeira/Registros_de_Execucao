@@ -28,6 +28,18 @@ load_dotenv()
 os.environ['GOOGLE_API_KEY'] = os.getenv('GEMINI_API_KEY')
 
 
+def refresh_api_keys() -> None:
+    """Atualiza as chaves em memória e recria o cliente Gemini quando a configuração mudar."""
+    gemini_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+    if gemini_key:
+        os.environ["GEMINI_API_KEY"] = gemini_key
+        os.environ["GOOGLE_API_KEY"] = gemini_key
+
+    global model, structured_model
+    model = ChatGoogleGenerativeAI(model=nome_modelo, temperature=1)
+    structured_model = model.with_structured_output(Queries)
+
+
 # Define o estado do agente (AgentState)
 class AgentState(TypedDict):
     tarefa: str

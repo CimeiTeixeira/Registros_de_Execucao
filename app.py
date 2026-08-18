@@ -1,5 +1,7 @@
 # app.py
 import json
+import os
+import shutil
 import warnings
 
 import gradio as gr
@@ -21,15 +23,117 @@ from gradio_modal import Modal
 from pathlib import Path
 import base64
 import markdown as markdown_lib
+from dotenv import dotenv_values, set_key
 from backend import (
     PROMPT_KEYS,
     executar_revisao,
     graph,
     load_prompt_config,
+    refresh_api_keys,
     save_prompt_config,
 )
-from rag import build_rag_stores
+from rag import ADDITIONAL_BASE_DIR, LOCAL_DOCUMENT_SUFFIXES, build_rag_stores, discover_local_documents
 import uuid
+
+
+ENV_PATH = Path(".env")
+
+
+def list_additional_files() -> list[str]:
+    """Retorna os arquivos suportados atualmente disponíveis na base adicional."""
+    return [
+        str(file_path.relative_to(ADDITIONAL_BASE_DIR))
+        for file_path in discover_local_documents()
+    ]
+
+
+def refresh_additional_files(message: str = ""):
+    files = list_additional_files()
+    status = status_html(message, color="#2e7d32") if message else ""
+    return gr.update(choices=files, value=None), status
+
+
+def upload_additional_files(uploaded_files):
+    if not uploaded_files:
+        return refresh_additional_files("Nenhum arquivo foi selecionado.")
+
+    ADDITIONAL_BASE_DIR.mkdir(parents=True, exist_ok=True)
+    copied_files = []
+    ignored_files = []
+
+    for uploaded_file in uploaded_files:
+        source_path = Path(getattr(uploaded_file, "name", uploaded_file))
+        if source_path.suffix.lower() not in LOCAL_DOCUMENT_SUFFIXES:
+            ignored_files.append(source_path.name)
+            continue
+
+        destination = ADDITIONAL_BASE_DIR / source_path.name
+        shutil.copy2(source_path, destination)
+        copied_files.append(source_path.name)
+
+    messages = []
+    if copied_files:
+        messages.append(f"{len(copied_files)} arquivo(s) adicionado(s) à base adicional.")
+    if ignored_files:
+        messages.append(
+            "Ignorados por formato não suportado: " + ", ".join(ignored_files) + "."
+        )
+    if not messages:
+        messages.append("Nenhum arquivo compatível foi adicionado.")
+
+    messages.append("Clique em 'Gerar Base' para reindexar os documentos.")
+    return refresh_additional_files(" ".join(messages))
+
+
+def delete_additional_file(selected_file: str):
+    if not selected_file:
+        return refresh_additional_files("Selecione um arquivo para excluir.")
+
+    base_dir = ADDITIONAL_BASE_DIR.resolve()
+    candidate = (base_dir / selected_file).resolve()
+    try:
+        candidate.relative_to(base_dir)
+    except ValueError:
+        return refresh_additional_files("Arquivo inválido para exclusão.")
+
+    if not candidate.is_file():
+        return refresh_additional_files("O arquivo selecionado não foi encontrado.")
+
+    candidate.unlink()
+    return refresh_additional_files(
+        f"Arquivo excluído: {selected_file}. Clique em 'Gerar Base' para reindexar.",
+    )
+
+
+def load_api_key_settings() -> tuple[str, str]:
+    values = dotenv_values(str(ENV_PATH))
+    gemini_key = (values.get("GEMINI_API_KEY") or "").strip()
+    tavily_key = (values.get("TAVILY_API_KEY") or "").strip()
+    return gemini_key, tavily_key
+
+
+def save_api_key_settings(gemini_key: str, tavily_key: str):
+    gemini_value = (gemini_key or "").strip()
+    tavily_value = (tavily_key or "").strip()
+
+    if not ENV_PATH.exists():
+        ENV_PATH.touch(encoding="utf-8")
+
+    set_key(str(ENV_PATH), "GEMINI_API_KEY", gemini_value, quote_mode="never")
+    set_key(str(ENV_PATH), "TAVILY_API_KEY", tavily_value, quote_mode="never")
+
+    if gemini_value:
+        os.environ["GEMINI_API_KEY"] = gemini_value
+        os.environ["GOOGLE_API_KEY"] = gemini_value
+    if tavily_value:
+        os.environ["TAVILY_API_KEY"] = tavily_value
+
+    refresh_api_keys()
+
+    return status_html(
+        "Chaves salvas e aplicadas. A chave do Tavily é opcional no fluxo atual do RAG.",
+        color="#2e7d32",
+    )
 
 
 def status_html(message: str, color: str = "#d32f2f") -> str:
@@ -57,7 +161,7 @@ def preload_rag():
         gr.update(interactive=False),
         gr.update(),
     )
-    build_rag_stores()
+    build_rag_stores(force_reload=True)
     yield (
         status_html("Base de conhecimento pronta. Você pode incluir o relato e gerar o registro.", color="#2e7d32"),
         gr.update(visible=False),
@@ -154,18 +258,18 @@ def generate_essay(topic: str, temperatura: float):
 
         if 'plano' in step_output:
             status = status_html("Planejando a redação...", color="#ef6c00")
-            process_log += f"PASSO 1: 📝 PLANO GERADO:\n{step_output['plano'][0]['text']}\n\n"
+            process_log += f"📝 PLANO GERADO:\n{step_output['plano'][0]['text']}\n\n"
         elif 'conteudo' in step_output:
             status = status_html("Buscando e organizando o contexto de pesquisa...", color="#f9a825")
             search_content = "\n".join(step_output['conteudo'])
-            process_log += f"PASSO 2: 🔍 CONTEÚDO DE PESQUISA:\n{search_content}\n\n"
+            process_log += f"🔍 CONTEÚDO DE PESQUISA:\n{search_content}\n\n"
         elif 'rascunho' in step_output:
             status = status_html("Gerando o rascunho final...", color="#ef6c00")
             final_draft = step_output['rascunho'][0]['text']
-            process_log += f"PASSO 3: ✍️ RASCUNHO GERADO:\n{final_draft}\n\n"
+            process_log += f"✍️ RASCUNHO GERADO:\n{final_draft}\n\n"
         elif 'critica' in step_output:
             status = status_html("Revisando e avaliando o texto...", color="#ef6c00")
-            process_log += f"PASSO 4: 🧐 CRÍTICA E REVISÃO:\n{step_output['critica'][0]['text']}\n\n"
+            process_log += f"🧐 CRÍTICA E REVISÃO:\n{step_output['critica'][0]['text']}\n\n"
 
         process_log += "---" * 20 + "\n\n"
         initial_state["_process_log"] = process_log
@@ -204,8 +308,8 @@ def apply_revision(state: dict, material_revisao: str):
     updated_state = executar_revisao(state, material_revisao.strip())
     process_log = state.get("_process_log", "") + (
         f"MATERIAL ADICIONAL PARA A REVISÃO:\n{material_revisao.strip() or '[Nenhum material adicional informado]'}\n\n"
-        f"PASSO 4: 🧐 CRÍTICA E REVISÃO:\n{updated_state['critica']}\n\n"
-        f"PASSO 3: ✍️ RASCUNHO REVISADO:\n{updated_state['rascunho']}\n\n"
+        f"REVISANDO: 🧐 CRÍTICA E REVISÃO:\n{updated_state['critica'][0]['text']}\n\n"
+        f"REVISANDO: ✍️ RASCUNHO REVISADO:\n{updated_state['rascunho'][0]['text']}\n\n"
         + "---" * 20
         + "\n\n"
     )
@@ -217,6 +321,9 @@ with gr.Blocks(
     css="#process-output textarea { overflow-y: auto !important; }",
     theme=gr.themes.Default(spacing_size="sm", text_size="lg"),
 ) as demo:
+
+    with gr.Tab("Sobre"):
+        gr.HTML(render_about_html())
 
     with gr.Tab("Principal"):
 
@@ -300,8 +407,112 @@ with gr.Blocks(
             with gr.Column(scale=8, min_width=0):
                 pass    
 
-    with gr.Tab("Sobre"):
-        gr.HTML(render_about_html())
+    with gr.Tab("Base Adicional"):
+        gr.Markdown("# Gerenciamento da base adicional")
+        gr.Markdown(
+            "Adicione documentos locais que serão usados pelo RAG. São aceitos arquivos .md, .txt e .pdf; "
+            "subpastas não são necessárias para os uploads feitos aqui."
+        )
+
+        additional_file_upload = gr.File(
+            label="Arquivos para adicionar",
+            file_count="multiple",
+            file_types=[".md", ".txt", ".pdf"],
+            type="filepath",
+        )
+        upload_additional_button = gr.Button("Adicionar arquivos", variant="primary")
+
+        additional_files = gr.Dropdown(
+            label="Arquivos atualmente na base_adicional",
+            choices=list_additional_files(),
+            value=None,
+            interactive=True,
+        )
+        delete_additional_button = gr.Button("Excluir arquivo selecionado")
+        additional_files_status = gr.HTML(
+            status_html(
+                "Os arquivos só entram no RAG depois que você clicar em 'Gerar Base' na aba Principal.",
+                color="#ef6c00",
+            ),
+            padding=True,
+        )
+
+    with gr.Tab("Chaves"):
+        gr.Markdown("# Chaves de acesso")
+        gr.Markdown(
+            "Configure as chaves para o Gemini e para o Tavily. No fluxo atual, a chave do Tavily é opcional, "
+            "porque o RAG usa somente documentos locais e URLs permitidas."
+        )
+
+        with gr.Row():
+            with gr.Column(scale=1):
+                pass
+            with gr.Column(scale=10):
+                gemini_key_input = gr.Textbox(
+                    label="GEMINI_API_KEY",
+                    type="password",
+                    placeholder="Cole sua chave do Gemini",
+                )
+            with gr.Column(scale=1):
+                pass
+
+        with gr.Row():
+            with gr.Column(scale=1):
+                pass
+            with gr.Column(scale=10):
+                tavily_key_input = gr.Textbox(
+                    label="TAVILY_API_KEY",
+                    type="password",
+                    placeholder="Opcional: cole sua chave do Tavily",
+                )
+            with gr.Column(scale=1):
+                pass
+
+        with gr.Row():
+            with gr.Column(scale=8, min_width=0):
+                            pass
+            with gr.Column(scale=4):
+                save_keys_button = gr.Button("Salvar chaves", variant="primary")
+            with gr.Column(scale=8, min_width=0):
+                            pass
+
+        with gr.Row():
+            with gr.Column(scale=12):
+                keys_status = gr.HTML(
+                    status_html(
+                        "As chaves ficam salvas em .env e são aplicadas na sessão atual. O Tavily é opcional neste fluxo.",
+                        color="#ef6c00",
+                    ),
+                    padding=True,
+                )
+
+    demo.load(
+        fn=lambda: load_api_key_settings(),
+        outputs=[gemini_key_input, tavily_key_input],
+    )
+
+    save_keys_button.click(
+        fn=save_api_key_settings,
+        inputs=[gemini_key_input, tavily_key_input],
+        outputs=[keys_status],
+    )
+
+    upload_additional_button.click(
+        fn=upload_additional_files,
+        inputs=[additional_file_upload],
+        outputs=[additional_files, additional_files_status],
+    )
+
+    delete_additional_button.click(
+        fn=delete_additional_file,
+        inputs=[additional_files],
+        outputs=[additional_files, additional_files_status],
+    )
+
+    demo.load(
+        fn=lambda: refresh_additional_files(),
+        outputs=[additional_files, additional_files_status],
+    )
 
     # Associa o botão à função Python
     generate_button.click(

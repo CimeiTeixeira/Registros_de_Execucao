@@ -38,10 +38,8 @@ DOC_PATHS = [
     "minimanuais-de-orientacoes-especificas",
 ]
 
-LOCAL_DOCS = [
-    "Plano_de_Entregas.md",
-    "Info_adicionais.md",
-]
+ADDITIONAL_BASE_DIR = Path(__file__).resolve().parent / "base_adicional"
+LOCAL_DOCUMENT_SUFFIXES = {".md", ".txt", ".pdf"}
 
 RAG_STORES: dict[str, InMemoryVectorStore] = {}
 
@@ -49,17 +47,17 @@ RAG_STORES: dict[str, InMemoryVectorStore] = {}
 # Funções para construir e recuperar os stores de documentos, indexando-os apenas uma vez
 #####################
 
-def build_rag_stores() -> dict[str, InMemoryVectorStore]:
+def build_rag_stores(force_reload: bool = False) -> dict[str, InMemoryVectorStore]:
     """Carrega e indexa os documentos restritos às URLs informadas e aos arquivos locais, em cache."""
     global RAG_STORES
 
-    if RAG_STORES:
+    if RAG_STORES and not force_reload:
         logger.info("Stores RAG já carregados; utilizando cache.")
         return RAG_STORES
 
     logger.info("Iniciando carregamento dos documentos do RAG.")
     web_docs, web_errors = load_url_documents()
-    local_docs = load_local_documents(LOCAL_DOCS)
+    local_docs = load_local_documents()
     logger.info("Documentos carregados: %d web, %d locais.", len(web_docs), len(local_docs))
 
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
@@ -246,14 +244,32 @@ def load_pdf_documents(pdf_url: str, error_messages: list[str]) -> list[Document
 #     return docs
 
 
-def load_local_documents(local_doc_paths: list[str] | None = None) -> list[Document]:
-    """Carrega documentos locais do projeto, como Markdown, TXT ou PDF."""
-    local_paths = local_doc_paths or LOCAL_DOCS
+def discover_local_documents() -> list[Path]:
+    """Encontra recursivamente os arquivos suportados na base adicional do usuário."""
+    if not ADDITIONAL_BASE_DIR.exists():
+        logger.warning("Pasta da base adicional não encontrada: %s", ADDITIONAL_BASE_DIR)
+        return []
+
+    return sorted(
+        (
+            file_path
+            for file_path in ADDITIONAL_BASE_DIR.rglob("*")
+            if file_path.is_file() and file_path.suffix.lower() in LOCAL_DOCUMENT_SUFFIXES
+        ),
+        key=lambda file_path: str(file_path).lower(),
+    )
+
+
+def load_local_documents(local_doc_paths: list[str] | list[Path] | None = None) -> list[Document]:
+    """Carrega todos os documentos locais suportados da base adicional."""
     docs: list[Document] = []
     project_dir = Path(__file__).resolve().parent
+    local_paths = local_doc_paths if local_doc_paths is not None else discover_local_documents()
 
     for relative_path in local_paths:
-        file_path = (project_dir / relative_path).resolve()
+        file_path = Path(relative_path)
+        if not file_path.is_absolute():
+            file_path = (project_dir / file_path).resolve()
         if not file_path.exists():
             continue
 
@@ -355,7 +371,7 @@ if __name__ == "__main__":
     #################
 
     web_docs, web_errors = load_url_documents()
-    local_docs = load_local_documents(LOCAL_DOCS)
+    local_docs = load_local_documents()
 
     print(f"Carregados {len(web_docs)} documentos das URLs.")
     print(f"Carregados {len(local_docs)} documentos locais.")
