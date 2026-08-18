@@ -24,6 +24,9 @@ checkpoints.db-shm
 checkpoints.db-wal
 rag.log
 
+# Conteúdo adicional fornecido pelo usuário
+base_adicional/*
+
 # Editor / SO
 .vscode/
 .idea/
