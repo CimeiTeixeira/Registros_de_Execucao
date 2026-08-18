@@ -27,6 +27,10 @@ rag.log
 # Conteúdo adicional fornecido pelo usuário
 base_adicional/*
 
+# Artefatos do PyInstaller
+build/
+dist/
+
 # Editor / SO
 .vscode/
 .idea/
