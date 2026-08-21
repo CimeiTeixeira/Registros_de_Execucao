@@ -116,6 +116,9 @@ def save_api_key_settings(gemini_key: str, tavily_key: str):
     gemini_value = (gemini_key or "").strip()
     tavily_value = (tavily_key or "").strip()
 
+    if not gemini_value:
+        return status_html("Informe a chave do Gemini para salvar a configuração.")
+
     if not ENV_PATH.exists():
         ENV_PATH.touch(encoding="utf-8")
 
