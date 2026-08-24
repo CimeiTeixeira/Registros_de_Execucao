@@ -301,7 +301,7 @@ def apply_revision(state: dict, material_revisao: str):
 
     status = status_html("Analisando o registro para uma nova revisão...", color="#ef6c00")
     yield (
-        state["rascunho"],
+        state["rascunho"][0]["text"],
         state.get("_process_log", ""),
         status,
         state,
@@ -318,7 +318,7 @@ def apply_revision(state: dict, material_revisao: str):
         + "\n\n"
     )
     status = status_html("Revisão concluída. Você pode solicitar outra revisão.", color="#2e7d32")
-    yield updated_state["rascunho"], process_log, status, updated_state, gr.update(interactive=True), gr.update(visible=False)
+    yield updated_state["rascunho"][0]["text"], process_log, status, updated_state, gr.update(interactive=True), gr.update(visible=False)
 
 # --- Criação da Interface Gradio ---
 with gr.Blocks(
