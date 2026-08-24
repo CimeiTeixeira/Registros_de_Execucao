@@ -121,7 +121,7 @@ def save_api_key_settings(gemini_key: str, tavily_key: str):
         return status_html("Informe a chave do Gemini para salvar a configuração.")
 
     if not ENV_PATH.exists():
-        ENV_PATH.touch(encoding="utf-8")
+        ENV_PATH.touch()
 
     set_key(str(ENV_PATH), "GEMINI_API_KEY", gemini_value, quote_mode="never")
     set_key(str(ENV_PATH), "TAVILY_API_KEY", tavily_value, quote_mode="never")
