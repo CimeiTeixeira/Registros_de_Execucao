@@ -120,7 +120,7 @@ def save_api_key_settings(gemini_key: str, tavily_key: str):
         return status_html("Informe a chave do Gemini para salvar a configuração.")
 
     if not ENV_PATH.exists():
-        ENV_PATH.touch(encoding="utf-8")
+        ENV_PATH.touch()
 
     set_key(str(ENV_PATH), "GEMINI_API_KEY", gemini_value, quote_mode="never")
     set_key(str(ENV_PATH), "TAVILY_API_KEY", tavily_value, quote_mode="never")
@@ -267,11 +267,15 @@ def generate_essay(topic: str, temperatura: float):
             search_content = "\n".join(step_output['conteudo'])
             process_log += f"🔍 CONTEÚDO DE PESQUISA:\n{search_content}\n\n"
         elif 'rascunho' in step_output:
-            status = status_html("Gerando o rascunho final...", color="#ef6c00")
-            final_draft = step_output['rascunho'][0]['text']
-            process_log += f"✍️ RASCUNHO GERADO:\n{final_draft}\n\n"
+            draft = step_output['rascunho'][0]['text']
+            process_log += f"✍️ RASCUNHO GERADO:\n{draft}\n\n"
+            if initial_state["numero_revisao"] > initial_state["maximo_revisoes"]:
+                final_draft = draft
+                status = status_html("Redação final gerada. Finalizando...", color="#ef6c00")
+            else:
+                status = status_html("Rascunho gerado. Iniciando revisão...", color="#ef6c00")
         elif 'critica' in step_output:
-            status = status_html("Revisando e avaliando o texto...", color="#ef6c00")
+            status = status_html("Revisão concluída. Gerando redação final...", color="#ef6c00")
             process_log += f"🧐 CRÍTICA E REVISÃO:\n{step_output['critica'][0]['text']}\n\n"
 
         process_log += "---" * 20 + "\n\n"
@@ -300,7 +304,7 @@ def apply_revision(state: dict, material_revisao: str):
 
     status = status_html("Analisando o registro para uma nova revisão...", color="#ef6c00")
     yield (
-        state["rascunho"],
+        state["rascunho"][0]["text"],
         state.get("_process_log", ""),
         status,
         state,
@@ -317,7 +321,7 @@ def apply_revision(state: dict, material_revisao: str):
         + "\n\n"
     )
     status = status_html("Revisão concluída. Você pode solicitar outra revisão.", color="#2e7d32")
-    yield updated_state["rascunho"], process_log, status, updated_state, gr.update(interactive=True), gr.update(visible=False)
+    yield updated_state["rascunho"][0]["text"], process_log, status, updated_state, gr.update(interactive=True), gr.update(visible=False)
 
 # --- Criação da Interface Gradio ---
 with gr.Blocks(
