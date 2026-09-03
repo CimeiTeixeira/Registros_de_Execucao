@@ -23,6 +23,7 @@ checkpoints.db
 checkpoints.db-shm
 checkpoints.db-wal
 rag.log
+rag_index/
 
 # Conteúdo adicional fornecido pelo usuário
 base_adicional/*

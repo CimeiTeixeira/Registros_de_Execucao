@@ -1,6 +1,8 @@
 import io
+import json
 import logging
 import os
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
@@ -43,6 +45,55 @@ LOCAL_DOCUMENT_SUFFIXES = {".md", ".txt", ".pdf"}
 
 RAG_STORES: dict[str, InMemoryVectorStore] = {}
 
+RAG_INDEX_DIR = Path(__file__).resolve().parent / "rag_index"
+WEB_STORE_PATH = RAG_INDEX_DIR / "web_store.json"
+LOCAL_STORE_PATH = RAG_INDEX_DIR / "local_store.json"
+METADATA_PATH = RAG_INDEX_DIR / "metadata.json"
+
+
+def get_rag_index_status() -> dict:
+    """Retorna se existe uma base persistida em disco e quando foi gerada."""
+    if not METADATA_PATH.exists():
+        return {"exists": False, "generated_at": None}
+    try:
+        metadata = json.loads(METADATA_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"exists": False, "generated_at": None}
+    return {"exists": True, "generated_at": metadata.get("generated_at")}
+
+
+def _save_rag_stores_to_disk(web_store: InMemoryVectorStore, local_store: InMemoryVectorStore, web_errors: list[str]) -> str:
+    """Persiste os stores em disco e retorna o timestamp de geração."""
+    RAG_INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    web_store.dump(str(WEB_STORE_PATH))
+    local_store.dump(str(LOCAL_STORE_PATH))
+    generated_at = datetime.now().isoformat(timespec="seconds")
+    METADATA_PATH.write_text(
+        json.dumps({"generated_at": generated_at, "web_errors": web_errors}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return generated_at
+
+
+def _load_rag_stores_from_disk(embeddings) -> dict[str, InMemoryVectorStore] | None:
+    """Tenta carregar os stores persistidos em disco; retorna None se indisponíveis."""
+    if not (WEB_STORE_PATH.exists() and LOCAL_STORE_PATH.exists() and METADATA_PATH.exists()):
+        return None
+    try:
+        web_vector_store = InMemoryVectorStore.load(str(WEB_STORE_PATH), embedding=embeddings)
+        local_vector_store = InMemoryVectorStore.load(str(LOCAL_STORE_PATH), embedding=embeddings)
+        metadata = json.loads(METADATA_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        logger.exception("Não foi possível carregar a base RAG persistida em disco.")
+        return None
+
+    logger.info("Base RAG carregada do disco (gerada em %s).", metadata.get("generated_at"))
+    return {
+        "web": web_vector_store,
+        "local": local_vector_store,
+        "web_errors": metadata.get("web_errors", []),
+    }
+
 ########
 # Funções para construir e recuperar os stores de documentos, indexando-os apenas uma vez
 #####################
@@ -54,6 +105,18 @@ def build_rag_stores(force_reload: bool = False) -> dict[str, InMemoryVectorStor
     if RAG_STORES and not force_reload:
         logger.info("Stores RAG já carregados; utilizando cache.")
         return RAG_STORES
+
+    embeddings = HuggingFaceEmbeddings(
+        model_name="tardellirs/colibri-embed-ptbr",
+        model_kwargs={"device": "cpu"},
+        encode_kwargs={"normalize_embeddings": False},
+    )
+
+    if not force_reload:
+        stores_from_disk = _load_rag_stores_from_disk(embeddings)
+        if stores_from_disk is not None:
+            RAG_STORES = stores_from_disk
+            return RAG_STORES
 
     logger.info("Iniciando carregamento dos documentos do RAG.")
     web_docs, web_errors = load_url_documents()
@@ -69,12 +132,6 @@ def build_rag_stores(force_reload: bool = False) -> dict[str, InMemoryVectorStor
     for index, chunk in enumerate(local_splits[:2], start=1):
         logger.info("local chunk %d:\n%s", index, chunk.page_content)
 
-    embeddings = HuggingFaceEmbeddings(
-        model_name="tardellirs/colibri-embed-ptbr",
-        model_kwargs={"device": "cpu"},
-        encode_kwargs={"normalize_embeddings": False},
-    )
-
     web_vector_store = InMemoryVectorStore(embeddings)
     local_vector_store = InMemoryVectorStore(embeddings)
 
@@ -82,6 +139,8 @@ def build_rag_stores(force_reload: bool = False) -> dict[str, InMemoryVectorStor
         web_vector_store.add_documents(documents=web_splits)
     if local_splits:
         local_vector_store.add_documents(documents=local_splits)
+
+    _save_rag_stores_to_disk(web_vector_store, local_vector_store, web_errors)
 
     RAG_STORES = {
         "web": web_vector_store,

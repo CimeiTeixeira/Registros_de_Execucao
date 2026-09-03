@@ -10,7 +10,9 @@ from dotenv import load_dotenv
 from typing import TypedDict, Annotated, List
 import operator
 
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import AzureChatOpenAI
 from pydantic import BaseModel
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
@@ -31,17 +33,11 @@ if gemini_api_key:
 
 
 def refresh_api_keys() -> None:
-    """Atualiza as chaves em memória e recria o cliente Gemini quando a configuração mudar."""
+    """Atualiza as variáveis de ambiente usadas pelos provedores de modelos."""
     gemini_key = (os.getenv("GEMINI_API_KEY") or "").strip()
-    if not gemini_key:
-        raise ValueError("Configure a chave do Gemini antes de gerar um registro.")
-
-    os.environ["GEMINI_API_KEY"] = gemini_key
-    os.environ["GOOGLE_API_KEY"] = gemini_key
-
-    global model, structured_model
-    model = ChatGoogleGenerativeAI(model=nome_modelo, temperature=1)
-    structured_model = model.with_structured_output(Queries)
+    if gemini_key:
+        os.environ["GEMINI_API_KEY"] = gemini_key
+        os.environ["GOOGLE_API_KEY"] = gemini_key
 
 
 # Define o estado do agente (AgentState)
@@ -55,6 +51,7 @@ class AgentState(TypedDict):
     maximo_revisoes: int
     temperatura: float
     material_revisao: str
+    provedor_modelo: str
 
 
 # Define o modelo Pydantic para a saída estruturada
@@ -66,10 +63,9 @@ class Queries(BaseModel):
 conn = sqlite3.connect("checkpoints.db", check_same_thread=False)
 memory = SqliteSaver(conn)
 
-# Inicializa o modelo de linguagem
+# Configurações de modelo
 nome_modelo = os.getenv("GOOGLE_MODEL", "gemini-3-flash-preview")
-model = None
-structured_model = None
+AZURE_OPENAI_SCOPE = "https://cognitiveservices.azure.com/.default"
 
 PROMPTS_FILE = Path(__file__).resolve().parent / "prompts.json"
 PROMPT_KEYS = (
@@ -103,6 +99,29 @@ def save_prompt_config(prompts: dict[str, str]) -> None:
 
 
 def modelo_da_execucao(state: AgentState):
+    provedor = state.get("provedor_modelo", "Azure OpenAI")
+
+    if provedor == "Azure OpenAI":
+        azure_endpoint = (os.getenv("AZURE_OPENAI_ENDPOINT") or "").strip()
+        azure_deployment = (os.getenv("AZURE_OPENAI_DEPLOYMENT") or "").strip()
+        azure_api_version = (os.getenv("AZURE_OPENAI_API_VERSION") or "2024-10-21").strip()
+        if not azure_endpoint or not azure_deployment:
+            raise ValueError(
+                "Configure AZURE_OPENAI_ENDPOINT e AZURE_OPENAI_DEPLOYMENT no arquivo .env."
+            )
+
+        token_provider = get_bearer_token_provider(
+            DefaultAzureCredential(),
+            AZURE_OPENAI_SCOPE,
+        )
+        return AzureChatOpenAI(
+            azure_endpoint=azure_endpoint,
+            azure_deployment=azure_deployment,
+            api_version=azure_api_version,
+            azure_ad_token_provider=token_provider,
+            temperature=state.get("temperatura", 1),
+        )
+
     gemini_key = (os.getenv("GEMINI_API_KEY") or "").strip()
     if not gemini_key:
         raise ValueError("Configure a chave do Gemini na aba Chaves antes de gerar um registro.")
