@@ -22,6 +22,7 @@ warnings.filterwarnings(
 from gradio_modal import Modal
 from pathlib import Path
 import base64
+import sys
 from datetime import datetime
 import markdown as markdown_lib
 from dotenv import dotenv_values, set_key
@@ -43,7 +44,21 @@ from rag import (
 import uuid
 
 
-ENV_PATH = Path(".env")
+def resource_path(*parts: str) -> Path:
+    """Resolve arquivos de dados empacotados (_internal no PyInstaller) ou do script."""
+    if getattr(sys, "frozen", False):
+        # PyInstaller onedir coloca os dados em <pasta_do_exe>\_internal
+        return Path(sys.executable).resolve().parent / "_internal" / Path(*parts)
+    return Path(__file__).resolve().parent.joinpath(*parts)
+
+
+def app_data_path(*parts: str) -> Path:
+    """Resolve arquivos criados em runtime ao lado do executável ou do script."""
+    base = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+    return base.joinpath(*parts)
+
+
+ENV_PATH = app_data_path(".env")
 
 
 def extract_text(content) -> str:
@@ -267,8 +282,8 @@ def load_prompts_for_editor():
 
 def render_about_html() -> str:
     """Converte Sobre.md em HTML, embutindo a imagem do grafo como data URI."""
-    about_text = Path("Sobre.md").read_text(encoding="utf-8")
-    image_path = Path("grafo_projeto.png")
+    about_text = resource_path("Sobre.md").read_text(encoding="utf-8")
+    image_path = resource_path("grafo_projeto.png")
     if image_path.exists():
         encoded_image = base64.b64encode(image_path.read_bytes()).decode("ascii")
         about_text = about_text.replace(

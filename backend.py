@@ -4,6 +4,7 @@ warnings.filterwarnings("ignore", message=".*TqdmWarning.*")
 
 import json
 import os
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -67,7 +68,7 @@ memory = SqliteSaver(conn)
 nome_modelo = os.getenv("GOOGLE_MODEL", "gemini-3-flash-preview")
 AZURE_OPENAI_SCOPE = "https://cognitiveservices.azure.com/.default"
 
-PROMPTS_FILE = Path(__file__).resolve().parent / "prompts.json"
+PROMPTS_FILE = (Path(sys.executable).resolve().parent / "_internal" / "prompts.json") if getattr(sys, "frozen", False) else Path(__file__).resolve().parent / "prompts.json"
 PROMPT_KEYS = (
     "PLANEJAMENTO_PROMPT",
     "PESQUISA_PLANEJAMENTO_PROMPT",
