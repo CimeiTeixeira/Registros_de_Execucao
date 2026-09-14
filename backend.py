@@ -12,6 +12,7 @@ from typing import TypedDict, Annotated, List
 import operator
 
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import AzureChatOpenAI
 from pydantic import BaseModel
@@ -67,6 +68,14 @@ memory = SqliteSaver(conn)
 # Configurações de modelo
 nome_modelo = os.getenv("GOOGLE_MODEL", "gemini-3-flash-preview")
 AZURE_OPENAI_SCOPE = "https://cognitiveservices.azure.com/.default"
+
+# Rate limiter para evitar erro 429 (ResourceExhausted / RPM spike)
+# 0.25 requisição/s = 1 requisição a cada 4 segundos (máximo 15 requisições por minuto)
+gemini_rate_limiter = InMemoryRateLimiter(
+    requests_per_second=0.25,
+    check_every_n_seconds=0.1,
+    max_bucket_size=1,
+)
 
 PROMPTS_FILE = (Path(sys.executable).resolve().parent / "_internal" / "prompts.json") if getattr(sys, "frozen", False) else Path(__file__).resolve().parent / "prompts.json"
 PROMPT_KEYS = (
@@ -130,6 +139,8 @@ def modelo_da_execucao(state: AgentState):
     return ChatGoogleGenerativeAI(
         model=nome_modelo,
         temperature=state.get("temperatura", 1),
+        rate_limiter=gemini_rate_limiter,
+        max_retries=2,
     )
 
 # Definição dos nós do LangGraph
